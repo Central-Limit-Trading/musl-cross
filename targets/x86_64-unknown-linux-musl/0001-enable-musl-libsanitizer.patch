@@ -1,0 +1,58 @@
+diff --git a/config/cc/gcc.in b/config/cc/gcc.in
+index 7928468c1eb2..e5b5c0f754ee 100644
+--- a/config/cc/gcc.in
++++ b/config/cc/gcc.in
+@@ -328,7 +328,7 @@ config CC_GCC_LIBSANITIZER
+     tristate
+     prompt "Compile libsanitizer"
+     depends on THREADS_NATIVE
+-    depends on !LIBC_UCLIBC_NG && !LIBC_MUSL # Currently lacks required headers (like netrom.h)
++    depends on !LIBC_UCLIBC_NG # uClibc-ng lacks required headers; musl is fixed via the libsanitizer struct_sock_fprog_sz patch (x86_64, gated by ARCH_SUPPORTS_LIBSANITIZER)
+     depends on ARCH_SUPPORTS_LIBSANITIZER
+     help
+       libsanitizer is a library which provides run-time sanitising of either
+diff --git a/packages/gcc/15.2.0/0011-libsanitizer-struct_sock_fprog_sz.patch b/packages/gcc/15.2.0/0011-libsanitizer-struct_sock_fprog_sz.patch
+new file mode 100644
+index 000000000000..600c2523331f
+--- /dev/null
++++ b/packages/gcc/15.2.0/0011-libsanitizer-struct_sock_fprog_sz.patch
+@@ -0,0 +1,39 @@
++Enable GCC libsanitizer (ASan/LSan/UBSan/TSan) build against musl libc.
++
++This is the only libsanitizer-specific source change required for musl on
++x86_64. Taken verbatim from Alpine Linux aports (which ships working
++libsanitizer on x86_64 musl with GCC 15.2.0):
++  https://github.com/alpinelinux/aports/blob/master/main/gcc/0042-libsanitizer-struct_sock_fprog_sz.patch
++
++--- original Alpine patch follows ---
++Provide struct_sock_fprog_sz on Linux, rather than on Linux+glibc.
++
++With `#include <linux/filter.h>` `struct sock_fprog` is available when
++linux headers are available. It seems that glibc is just including that header
++as an implementation detail, while musl does not.
++--- a/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp	2025-08-08 08:51:45.621434001 +0200
+++++ b/libsanitizer/sanitizer_common/sanitizer_platform_limits_posix.cpp	2026-02-25 20:29:28.519492722 +0100
++@@ -74,6 +74,7 @@
++ #include <sys/vt.h>
++ #include <linux/cdrom.h>
++ #include <linux/fd.h>
+++#include <linux/filter.h>
++ #if SANITIZER_ANDROID
++ #include <linux/fs.h>
++ #endif
++@@ -507,6 +508,7 @@ unsigned struct_ElfW_Phdr_sz = sizeof(El
++   unsigned struct_seq_event_rec_sz = sizeof(struct seq_event_rec);
++   unsigned struct_synth_info_sz = sizeof(struct synth_info);
++   unsigned struct_vt_mode_sz = sizeof(struct vt_mode);
+++  unsigned struct_sock_fprog_sz = sizeof(struct sock_fprog);
++ #endif // SANITIZER_LINUX
++ 
++ #if SANITIZER_GLIBC
++@@ -534,7 +536,6 @@ unsigned struct_ElfW_Phdr_sz = sizeof(El
++ 
++   unsigned struct_audio_buf_info_sz = sizeof(struct audio_buf_info);
++   unsigned struct_ppp_stats_sz = sizeof(struct ppp_stats);
++-  unsigned struct_sock_fprog_sz = sizeof(struct sock_fprog);
++ #  endif  // SANITIZER_GLIBC
++ 
++ #  if !SANITIZER_ANDROID && !SANITIZER_APPLE
