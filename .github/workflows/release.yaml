@@ -9,7 +9,7 @@ on:
         default: 'x86_64-unknown-linux-musl'
         type: string
       containers:
-        description: 'Container selection (comma-separated: amazonlinux2,alinux3,centos7,ubuntu22,all)'
+        description: 'Container selection (comma-separated: amazonlinux2,centos7,ubuntu22,all)'
         required: false
         default: 'all'
         type: string
@@ -40,7 +40,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
@@ -50,7 +50,6 @@ jobs:
           # Define all available container configurations
           declare -A containers
           containers[amazonlinux2]='{"image":"public.ecr.aws/amazonlinux/amazonlinux:2","label":"amazonlinux2"}'
-          containers[alinux3]='{"image":"alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest","label":"alinux3"}'
           containers[centos7]='{"image":"centos:7.9.2009","label":"centos7"}'
           containers[ubuntu22]='{"image":"ubuntu:22.04","label":"ubuntu22"}'
 
@@ -65,7 +64,7 @@ jobs:
 
           # Parse container selection
           if [ "$CONTAINER_INPUT" = "all" ]; then
-            SELECTED_CONTAINERS=("amazonlinux2" "alinux3" "centos7" "ubuntu22")
+            SELECTED_CONTAINERS=("amazonlinux2" "centos7" "ubuntu22")
           else
             IFS=',' read -ra SELECTED_CONTAINERS <<< "$CONTAINER_INPUT"
           fi
@@ -96,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare-matrix.outputs.matrix) }}
-    timeout-minutes: 1440
+    timeout-minutes: 90
     steps:
       - name: Free up disk space
         run: |
@@ -128,7 +127,7 @@ jobs:
           df -h
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           submodules: true
@@ -168,7 +167,7 @@ jobs:
           cat ${{ matrix.target }}-${{ matrix.container.label }}.tar.xz.sha256
 
       - name: Upload package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-${{ matrix.container.label }}.tar.xz
           path: ${{ matrix.target }}-${{ matrix.container.label }}.tar.xz
@@ -176,7 +175,7 @@ jobs:
           retention-days: 7
 
       - name: Upload checksum
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-${{ matrix.container.label }}.tar.xz.sha256
           path: ${{ matrix.target }}-${{ matrix.container.label }}.tar.xz.sha256
@@ -201,15 +200,18 @@ jobs:
     runs-on: ubuntu-22.04
     needs:
       - build
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    if: |
+      always() &&
+      (needs.build.result == 'success' || needs.build.result == 'failure') &&
+      (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release == true))
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release
           pattern: "*.tar.*"

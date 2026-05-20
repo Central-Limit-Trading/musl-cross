@@ -173,7 +173,17 @@ install_dependencies() {
 
     # Install packages
     echo "Installing dependencies (${#PACKAGES[@]} packages)..."
-    eval "$PKG_INSTALL_CMD ${PACKAGES[*]}"
+    for attempt in 1 2 3; do
+        if timeout 1800 bash -c "$PKG_INSTALL_CMD ${PACKAGES[*]}"; then
+            break
+        fi
+        if [ "$attempt" -eq 3 ]; then
+            echo "Error: Dependency installation failed after 3 attempts"
+            exit 1
+        fi
+        echo "Attempt $attempt failed, retrying in 10s..."
+        sleep 10
+    done
 
     # Execute additional setup commands
     if [ ${#EXTRA_SETUP_COMMANDS[@]} -gt 0 ]; then

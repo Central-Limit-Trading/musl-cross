@@ -45,61 +45,7 @@ docker run -d \
     tail -f /dev/null
 
 # Configure yum/dnf mirror
-if [[ "${CONTAINER_IMAGE}" == *"alinux3"* ]]; then
-    echo "Configuring Alibaba Cloud Linux 3 mirror..."
-    docker exec "${CONTAINER_NAME}" bash -c '
-        # Kill any existing dnf/yum processes to avoid lock issues
-        pkill -9 dnf || true
-        pkill -9 yum || true
-        pkill -9 packagekitd || true
-
-        # Remove lock files
-        rm -f /var/run/yum.pid /var/run/dnf.pid
-        rm -f /var/cache/dnf/*pid /var/cache/yum/*pid
-
-        # Backup original configuration
-        mkdir -p /etc/yum.repos.d/backup
-        cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
-
-        # Remove all existing repo files to avoid duplicates
-        rm -f /etc/yum.repos.d/*.repo
-
-        # Replace with Aliyun public mirror
-        cat > /etc/yum.repos.d/alinux3.repo <<EOF
-[alinux3-os]
-name=Alibaba Cloud Linux 3 - Os
-baseurl=https://mirrors.aliyun.com/alinux/\$releasever/os/\$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
-
-[alinux3-updates]
-name=Alibaba Cloud Linux 3 - Updates
-baseurl=https://mirrors.aliyun.com/alinux/\$releasever/updates/\$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
-
-[alinux3-plus]
-name=Alibaba Cloud Linux 3 - Plus
-baseurl=https://mirrors.aliyun.com/alinux/\$releasever/plus/\$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
-
-[alinux3-powertools]
-name=Alibaba Cloud Linux 3 - PowerTools
-baseurl=https://mirrors.aliyun.com/alinux/\$releasever/powertools/\$basearch/
-enabled=1
-gpgcheck=1
-gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
-EOF
-
-        # Clean cache
-        yum clean all || dnf clean all
-        echo "Mirror configuration completed"
-    '
-elif [[ "${CONTAINER_IMAGE}" == *"centos"* ]] || [[ "${OS_LABEL}" == "centos7" ]]; then
+if [[ "${CONTAINER_IMAGE}" == *"centos"* ]] || [[ "${OS_LABEL}" == "centos7" ]]; then
     echo "Configuring CentOS 7 mirror..."
     docker exec "${CONTAINER_NAME}" bash -c '
         # Update base repositories to Aliyun mirror (faster)
