@@ -6,7 +6,7 @@ Upgrade the `x86_64-unknown-linux-musl` toolchain from crosstool-NG
 `1.28.0-3-ga3fef857`, GCC 15.2.0, and musl 1.2.5 to a reproducible
 crosstool-NG master snapshot, GCC 16.1.0, and musl 1.2.6. Preserve the
 existing C, C++, OpenMP, quadmath, mold, and sanitizer capabilities and keep
-the three-container release matrix buildable.
+the four-container release matrix buildable.
 
 ## Current State
 
@@ -20,8 +20,8 @@ the three-container release matrix buildable.
   gate and adds a GCC 15.2.0-only source patch.
 - `0002-linux-kernel-mirror-fallback.patch` adds the kernel.org edge mirror to
   crosstool-NG's download fallback list.
-- GitHub Actions builds the target on Amazon Linux 2, CentOS 7, and Ubuntu
-  22.04.
+- GitHub Actions builds the target on Amazon Linux 2, Alibaba Cloud Linux 3,
+  CentOS 7, and Ubuntu 22.04.
 
 ## Upstream Baseline Decision
 
@@ -113,10 +113,20 @@ fallback after the CDN URL.
 
 ### Build scripts and package prerequisites
 
-Do not change the build flow unless verification exposes a concrete upstream
-requirement. The current container configurations provide GCC 10 on Amazon
-Linux 2, GCC 11 on CentOS 7, and GCC 11 on Ubuntu 22.04; each satisfies GCC
-16.1's requirement for an ISO C++14 compiler equivalent to GCC 5.4 or newer.
+The build flow must also support Alibaba Cloud Linux 3. Every consumer image
+installs its native GCC/G++ host compiler and `util-linux`; the latter provides
+`setarch`, which is required to run the TSan data-race check with ASLR disabled.
+Containers run with `seccomp=unconfined` so that `setarch -R` is not blocked by
+Docker's default seccomp profile.
+
+Package directly from `/opt/x-tools` with `tar -C` instead of moving the
+installed toolchain into the source worktree. This keeps repeated builds and
+reused runners from colliding with a stale target directory.
+
+The release metadata fixes the requested replacement tag at `v0.0.1`. After
+all four matrix jobs succeed, the release job force-moves that lightweight tag
+to the workflow commit, replaces existing assets with `--clobber`, and refreshes
+the release title and notes. A missing release is created with the same tag.
 
 Do not add compatibility aliases, alternate version paths, or fallback to GCC
 15/musl 1.2.5. A failed GCC 16.1 or musl 1.2.6 build must fail visibly.
@@ -201,9 +211,10 @@ CT_CC_GCC_LIBSANITIZER=y
 
 ### Full build matrix
 
-Run the existing release build for all three supported environments:
+Run the release build for all four supported environments:
 
 - Amazon Linux 2;
+- Alibaba Cloud Linux 3;
 - CentOS 7;
 - Ubuntu 22.04.
 
@@ -223,24 +234,25 @@ For every successful artifact:
 6. Compile and execute a C++ hello-world binary statically.
 7. Compile a dynamically linked binary and execute it through the packaged
    `ld-musl-x86_64.so.1` with the packaged sysroot library path.
-8. Compile an OpenMP program with `-fopenmp`, run it, and require successful
+8. Exercise GB18030-to-UTF-8 conversion through `iconv`, including the
+   CVE-2026-6042 regression input, under a timeout.
+9. Compile an OpenMP program with `-fopenmp`, run it, and require successful
    parallel execution.
-9. Confirm the target `libquadmath` exists, compile a program that calls
+10. Confirm the target `libquadmath` exists, compile a program that calls
    `quadmath_snprintf`, and execute it successfully.
-10. Invoke the packaged target mold linker, then compile and execute a program
+11. Invoke the packaged target mold linker, then compile and execute a program
     with `-fuse-ld=mold`.
-11. Confirm `libasan`, `liblsan`, `libubsan`, and `libtsan` exist in the
-   installed target runtime.
-12. Compile an AddressSanitizer heap-overflow program, execute it through the
+12. Confirm `libasan`, `liblsan`, `libubsan`, and `libtsan` exist in the
+    installed target runtime.
+13. Compile an AddressSanitizer heap-overflow program, execute it through the
     packaged loader, and require a nonzero exit plus an AddressSanitizer error.
-13. Compile an UndefinedBehaviorSanitizer signed-overflow program, execute it,
+14. Compile an UndefinedBehaviorSanitizer signed-overflow program, execute it,
     and require a runtime-error diagnostic.
-14. Compile a LeakSanitizer leak program, execute it, and require a leak
+15. Compile a LeakSanitizer leak program, execute it, and require a leak
     diagnostic.
-15. Compile a ThreadSanitizer data-race program, execute it, and require a data
-    race diagnostic. If the container kernel prevents TSan from starting, the
-    failure is environmental evidence to investigate, not a reason to remove
-    or silently skip the TSan gate.
+16. Compile a ThreadSanitizer data-race program, execute it with `setarch -R`,
+    and require a data-race diagnostic. A container that cannot disable ASLR
+    fails the gate; it does not silently skip TSan.
 
 ## Acceptance Criteria
 
@@ -252,13 +264,21 @@ The upgrade is complete only when all of the following are proven:
 - No GCC 15.2.0-specific local source patch remains.
 - The musl sanitizer configuration patch applies and sanitizer runtimes work.
 - The kernel mirror fallback patch applies to the new crosstool-NG source.
-- Amazon Linux 2, CentOS 7, and Ubuntu 22.04 all produce valid artifacts.
-- Artifact checksum, C, C++, dynamic loading, OpenMP, quadmath, mold, ASan,
-  LSan, UBSan, and TSan gates pass for every published artifact.
-- The root repository is clean after committing the intended upgrade.
+- Amazon Linux 2, Alibaba Cloud Linux 3, CentOS 7, and Ubuntu 22.04 all produce
+  valid artifacts.
+- Artifact checksum, C, C++, dynamic loading, iconv, OpenMP, quadmath, mold,
+  ASan, LSan, UBSan, and TSan gates pass for every release artifact.
+- The verified source changes are folded into the current root commit with
+  `git commit --amend --no-edit` and pushed to both configured remotes with
+  `git push --force-with-lease`; generated build intermediates are kept out of
+  the committed source tree.
+- Both repositories complete the full matrix before their existing `v0.0.1`
+  release tag, assets, title, and notes are replaced.
 
 ## Rollback
 
-Rollback is a normal git revert of the upgrade commit. The revert restores the
-previous `builder` gitlink, target config, and two target patches together. No
-generated toolchain or compatibility shim is part of the source rollback.
+Rollback means amending the previous `builder` gitlink, target config, two
+target patches, build scripts, and workflow behavior back together, then using
+`--force-with-lease` so a concurrently updated remote is never overwritten.
+The release tag must move with the rolled-back commit and its four artifact
+pairs. No generated toolchain or compatibility shim is part of source rollback.

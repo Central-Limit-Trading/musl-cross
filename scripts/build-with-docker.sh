@@ -38,6 +38,7 @@ docker rm -f "${CONTAINER_NAME}" 2>/dev/null || true
 # Start container
 echo "Starting container..."
 docker run -d \
+    --security-opt seccomp=unconfined \
     --name "${CONTAINER_NAME}" \
     -v "${PROJECT_ROOT}:/workspace/musl-cross" \
     -w /workspace/musl-cross \
@@ -45,7 +46,60 @@ docker run -d \
     tail -f /dev/null
 
 # Configure yum/dnf mirror
-if [[ "${CONTAINER_IMAGE}" == *"centos"* ]] || [[ "${OS_LABEL}" == "centos7" ]]; then
+if [[ "${OS_LABEL}" == "alinux3" ]] || [[ "${CONTAINER_IMAGE}" == *"alinux3"* ]]; then
+    echo "Configuring Alibaba Cloud Linux 3 mirror..."
+    docker exec "${CONTAINER_NAME}" bash -c '
+        pkill -9 dnf || true
+        pkill -9 yum || true
+        pkill -9 packagekitd || true
+        rm -f /var/run/yum.pid /var/run/dnf.pid
+        rm -f /var/cache/dnf/*pid /var/cache/yum/*pid
+
+        mkdir -p /etc/yum.repos.d/backup
+        cp /etc/yum.repos.d/*.repo /etc/yum.repos.d/backup/ 2>/dev/null || true
+        rm -f /etc/yum.repos.d/*.repo
+
+        cat > /etc/yum.repos.d/alinux3.repo <<EOF
+[alinux3-os]
+name=Alibaba Cloud Linux 3 - Os
+baseurl=https://mirrors.aliyun.com/alinux/\$releasever/os/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+
+[alinux3-updates]
+name=Alibaba Cloud Linux 3 - Updates
+baseurl=https://mirrors.aliyun.com/alinux/\$releasever/updates/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+
+[alinux3-module]
+name=Alibaba Cloud Linux 3 - Module
+baseurl=https://mirrors.aliyun.com/alinux/3/module/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+
+[alinux3-plus]
+name=Alibaba Cloud Linux 3 - Plus
+baseurl=https://mirrors.aliyun.com/alinux/\$releasever/plus/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+
+[alinux3-powertools]
+name=Alibaba Cloud Linux 3 - PowerTools
+baseurl=https://mirrors.aliyun.com/alinux/\$releasever/powertools/\$basearch/
+enabled=1
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/alinux/3/RPM-GPG-KEY-ALINUX-3
+EOF
+
+        (dnf clean all || yum clean all)
+        echo "Mirror configuration completed"
+    '
+elif [[ "${CONTAINER_IMAGE}" == *"centos"* ]] || [[ "${OS_LABEL}" == "centos7" ]]; then
     echo "Configuring CentOS 7 mirror..."
     docker exec "${CONTAINER_NAME}" bash -c '
         # Update base repositories to Aliyun mirror (faster)
@@ -70,18 +124,33 @@ docker exec "${CONTAINER_NAME}" bash -c "cd /workspace/musl-cross && ./scripts/m
 echo "=========================================="
 echo "Adding OS label to output files..."
 echo "=========================================="
-docker exec "${CONTAINER_NAME}" bash -c "
+docker exec \
+    -e BUILD_TARGET="${TARGET}" \
+    -e BUILD_OS_LABEL="${OS_LABEL}" \
+    "${CONTAINER_NAME}" bash -c '
     cd /workspace/musl-cross
-    if [ -f ${TARGET}.tar.xz ]; then
-        mv ${TARGET}.tar.xz ${TARGET}-${OS_LABEL}.tar.xz
-        mv ${TARGET}.tar.xz.sha256 ${TARGET}-${OS_LABEL}.tar.xz.sha256
-        echo 'Renaming completed:'
-        ls -lh ${TARGET}-${OS_LABEL}.tar.xz*
+    source_archive="${BUILD_TARGET}.tar.xz"
+    source_checksum="${source_archive}.sha256"
+    artifact="${BUILD_TARGET}-${BUILD_OS_LABEL}.tar.xz"
+    checksum="${artifact}.sha256"
+    if [ -f "${source_archive}" ] && [ -f "${source_checksum}" ]; then
+        mv "${source_archive}" "${artifact}"
+        mv "${source_checksum}" "${checksum}"
+        echo "Renaming completed:"
+        ls -lh "${artifact}" "${checksum}"
+        read -r actual_hash _ < <(sha256sum "${artifact}")
+        read -r expected_hash _ < "${checksum}"
+        if [ -z "${actual_hash}" ] || [ -z "${expected_hash}" ] || \
+           [ "${actual_hash}" != "${expected_hash}" ]; then
+            echo "Error: renamed artifact checksum mismatch"
+            exit 1
+        fi
+        echo "Checksum verification passed"
     else
-        echo 'Error: Build artifact does not exist'
+        echo "Error: build artifact or checksum does not exist"
         exit 1
     fi
-"
+'
 
 # Copy output files to host (if needed)
 echo "=========================================="
@@ -94,4 +163,3 @@ echo "=========================================="
 
 # Clean up container (optional, GitHub Actions will clean up automatically)
 # docker rm -f "${CONTAINER_NAME}"
-

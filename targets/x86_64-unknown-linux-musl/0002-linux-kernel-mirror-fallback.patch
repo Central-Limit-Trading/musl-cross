@@ -12,10 +12,9 @@ endpoint) before failing.
 diff --git a/scripts/functions b/scripts/functions
 --- a/scripts/functions
 +++ b/scripts/functions
-@@ -1811,7 +1811,8 @@
-                 # Ignore, this happens before .config is fully evaluated
+@@ -1855,6 +1855,7 @@
                  ;;
-             [3456].*)
+             [34567].*)
                  echo "https://cdn.kernel.org/pub/linux/kernel/v${version%%.*}.x"
 +                echo "https://mirrors.edge.kernel.org/pub/linux/kernel/v${version%%.*}.x"
                  ;;

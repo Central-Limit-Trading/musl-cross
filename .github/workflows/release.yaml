@@ -9,7 +9,7 @@ on:
         default: 'x86_64-unknown-linux-musl'
         type: string
       containers:
-        description: 'Container selection (comma-separated: amazonlinux2,centos7,ubuntu22,all)'
+        description: 'Container selection (comma-separated: amazonlinux2,alinux3,centos7,ubuntu22,all)'
         required: false
         default: 'all'
         type: string
@@ -23,10 +23,6 @@ on:
         required: false
         default: ''
         type: string
-  release:
-    types:
-      - published
-
 permissions:
   contents: write
   packages: write
@@ -50,6 +46,7 @@ jobs:
           # Define all available container configurations
           declare -A containers
           containers[amazonlinux2]='{"image":"public.ecr.aws/amazonlinux/amazonlinux:2","label":"amazonlinux2"}'
+          containers[alinux3]='{"image":"alibaba-cloud-linux-3-registry.cn-hangzhou.cr.aliyuncs.com/alinux3/alinux3:latest","label":"alinux3"}'
           containers[centos7]='{"image":"centos:7.9.2009","label":"centos7"}'
           containers[ubuntu22]='{"image":"ubuntu:22.04","label":"ubuntu22"}'
 
@@ -64,7 +61,7 @@ jobs:
 
           # Parse container selection
           if [ "$CONTAINER_INPUT" = "all" ]; then
-            SELECTED_CONTAINERS=("amazonlinux2" "centos7" "ubuntu22")
+            SELECTED_CONTAINERS=("amazonlinux2" "alinux3" "centos7" "ubuntu22")
           else
             IFS=',' read -ra SELECTED_CONTAINERS <<< "$CONTAINER_INPUT"
           fi
@@ -84,7 +81,7 @@ jobs:
           done
           matrix_json+=']}'
 
-          echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
+          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
           echo "Generated matrix:"
           echo "$matrix_json" | jq .
 
@@ -202,8 +199,11 @@ jobs:
       - build
     if: |
       always() &&
-      (needs.build.result == 'success' || needs.build.result == 'failure') &&
-      (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release == true))
+      needs.build.result == 'success' &&
+      github.event_name == 'workflow_dispatch' &&
+      inputs.create_release == true &&
+      inputs.containers == 'all' &&
+      inputs.targets == 'x86_64-unknown-linux-musl'
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -222,35 +222,56 @@ jobs:
           echo "| Filename | Sha256sum |" > RELEASE.md
           echo "| -------- | --------- |" >> RELEASE.md
           for i in release/*.sha256; do
-            echo "| $(basename $i .sha256) | $(cat $i) |" >> RELEASE.md
+            echo "| $(basename "$i" .sha256) | $(cat "$i") |" >> RELEASE.md
           done
 
           echo "Release content:"
           cat RELEASE.md
 
-      - name: Create or update release
+      - name: Create or replace release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Determine release tag
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-          else
-            TAG="${{ inputs.release_tag }}"
+          TAG="${{ inputs.release_tag }}"
+          source targets/x86_64-unknown-linux-musl/versions
+
+          if [ -z "$TAG" ]; then
+            echo "release_tag is required when create_release is true" >&2
+            exit 1
+          fi
+          if [ "$TAG" != "$EXPECTED_RELEASE_TAG" ]; then
+            echo "release_tag must be $EXPECTED_RELEASE_TAG, got $TAG" >&2
+            exit 1
           fi
 
           echo "Release tag: $TAG"
 
-          # Check if release exists
+          # This repository deliberately reuses v0.0.1. Move the lightweight tag
+          # to the exact commit that produced the verified artifacts.
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" \
+              -F force=true \
+              >/dev/null
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" \
+              >/dev/null
+          fi
+
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists, uploading artifacts..."
-            for i in release/*.tar.xz; do
-              gh release upload "$TAG" "$i" "$i.sha256" --clobber
-            done
-            gh release edit "$TAG" -F RELEASE.md
+            echo "Replacing existing release $TAG..."
+            gh release upload "$TAG" \
+              release/*.tar.xz release/*.sha256 \
+              --clobber
+            gh release edit "$TAG" \
+              --title "Release $TAG" \
+              --notes-file RELEASE.md
           else
             echo "Creating new release $TAG..."
             gh release create "$TAG" \
+              --verify-tag \
               --title "Release $TAG" \
               --notes-file RELEASE.md \
               release/*.tar.xz release/*.sha256

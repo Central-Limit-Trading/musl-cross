@@ -38,6 +38,16 @@ if [ "$2" == "--skip-deps" ]; then
     SKIP_DEPS=true
 fi
 
+# Load target-specific version expectations when the target declares them.
+EXPECTED_GCC_VERSION=""
+EXPECTED_MUSL_VERSION=""
+EXPECTED_MUSL_LOADER=""
+EXPECTED_VERSIONS_FILE="${PROJECT_ROOT}/targets/${TARGET}/versions"
+if [ -f "${EXPECTED_VERSIONS_FILE}" ]; then
+    # shellcheck disable=SC1090
+    source "${EXPECTED_VERSIONS_FILE}"
+fi
+
 # System detection function
 detect_system() {
     local system="unknown"
@@ -210,8 +220,8 @@ echo "=========================================="
 echo "Applying patches..."
 echo "=========================================="
 pushd builder
-# Only execute git commands in git repositories
-if [ -d .git ]; then
+# A submodule stores .git as a file, so ask Git instead of testing its type.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     git reset --hard HEAD
     git clean -fd
 fi
@@ -248,6 +258,21 @@ cp targets/"${TARGET}"/config build/.config
 pushd build
 /opt/ct-ng/bin/ct-ng olddefconfig
 
+if [ -n "${EXPECTED_GCC_VERSION}" ]; then
+    if ! grep -qx "CT_GCC_VERSION=\"${EXPECTED_GCC_VERSION}\"" .config; then
+        echo "Error: resolved GCC version does not equal ${EXPECTED_GCC_VERSION}" >&2
+        grep '^CT_GCC_VERSION=' .config >&2 || true
+        exit 1
+    fi
+fi
+if [ -n "${EXPECTED_MUSL_VERSION}" ]; then
+    if ! grep -qx "CT_MUSL_VERSION=\"${EXPECTED_MUSL_VERSION}\"" .config; then
+        echo "Error: resolved musl version does not equal ${EXPECTED_MUSL_VERSION}" >&2
+        grep '^CT_MUSL_VERSION=' .config >&2 || true
+        exit 1
+    fi
+fi
+
 # Reapply custom mirror configuration (olddefconfig resets some configurations)
 if grep -q "CT_MUSL_MIRRORS=" ../targets/"${TARGET}"/config; then
     MUSL_MIRRORS=$(grep "CT_MUSL_MIRRORS=" ../targets/"${TARGET}"/config | head -1)
@@ -257,16 +282,35 @@ fi
 
 /opt/ct-ng/bin/ct-ng build
 popd
+
+if [ -n "${EXPECTED_GCC_VERSION}${EXPECTED_MUSL_VERSION}${EXPECTED_MUSL_LOADER}" ]; then
+    if [ -z "${EXPECTED_GCC_VERSION}" ] || [ -z "${EXPECTED_MUSL_VERSION}" ] || \
+       [ -z "${EXPECTED_MUSL_LOADER}" ]; then
+        echo "Error: incomplete target version metadata in ${EXPECTED_VERSIONS_FILE}" >&2
+        exit 1
+    fi
+    "${PROJECT_ROOT}/scripts/verify-toolchain.sh" "${TARGET}" \
+        "/opt/x-tools/${TARGET}" "${EXPECTED_GCC_VERSION}" \
+        "${EXPECTED_MUSL_VERSION}" "${EXPECTED_MUSL_LOADER}"
+fi
 echo "Toolchain build completed"
 
 # Tarball
 echo "=========================================="
 echo "Packaging toolchain..."
 echo "=========================================="
-${SUDO_CMD} mv /opt/x-tools/"${TARGET}" .
-${SUDO_CMD} chown -R root:root "${TARGET}"
-${SUDO_CMD} tar -cJvf "${TARGET}.tar.xz" "${TARGET}"
+# Archive directly from the install root. Moving the toolchain into the source
+# worktree makes a repeated build fail when a previous packaging directory is
+# still present (for example on a reused runner or during a Docker matrix audit).
+${SUDO_CMD} tar -C /opt/x-tools -cJvf "${PROJECT_ROOT}/${TARGET}.tar.xz" "${TARGET}"
 ${SUDO_CMD} sha256sum "${TARGET}.tar.xz" | awk '{ print $1 }' > "${TARGET}.tar.xz.sha256"
+actual_hash=$(sha256sum "${TARGET}.tar.xz" | awk '{ print $1 }')
+expected_hash=$(cat "${TARGET}.tar.xz.sha256")
+if [ "${actual_hash}" != "${expected_hash}" ]; then
+    echo "Error: packaged artifact checksum mismatch" >&2
+    exit 1
+fi
+echo "Packaged artifact checksum verification: PASS"
 
 echo "=========================================="
 echo "Build completed!"
